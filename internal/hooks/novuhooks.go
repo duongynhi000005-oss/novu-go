@@ -98,9 +98,19 @@ func (h *NovuHooks) BeforeRequest(hookCtx BeforeRequestContext, req *http.Reques
 
 // AfterSuccess modifies the response after a successful request
 func (h *NovuHooks) AfterSuccess(hookCtx AfterSuccessContext, res *http.Response) (*http.Response, error) {
+	if res == nil || res.Body == nil {
+		return res, nil
+	}
+
+	// Do not unwrap or consume 4xx/5xx error responses; when retryConfig is active,
+	// AfterSuccess is invoked before HTTP status-code error handling.
+	if res.StatusCode >= http.StatusBadRequest {
+		return res, nil
+	}
+
 	// Check content type
 	contentType := res.Header.Get("Content-Type")
-	if res.Body == nil || !strings.Contains(contentType, "application/json") {
+	if !strings.Contains(contentType, "application/json") {
 		return res, nil
 	}
 
@@ -111,8 +121,10 @@ func (h *NovuHooks) AfterSuccess(hookCtx AfterSuccessContext, res *http.Response
 	}
 	defer res.Body.Close()
 
-	// If body is empty, return original response
+	// If body is empty, restore an unread empty NopCloser so downstream ConsumeRawBody
+	// does not read from a closed stream.
 	if len(bodyBytes) == 0 {
+		res.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		return res, nil
 	}
 
